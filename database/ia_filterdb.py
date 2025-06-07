@@ -187,27 +187,31 @@ async def get_search_results(query, max_results=MAX_BTN, offset=0, lang=None):
         regex = query
 
     filter = {'file_name': regex}
-    
-    # Get results from primary database
-    cursor = Media.find(filter).sort('$natural', -1)
-    results = [doc async for doc in cursor]
-    
-    # Get results from second database if configured
-    if SECOND_FILES_DATABASE_URL and SecondMedia:
-        cursor2 = SecondMedia.find(filter).sort('$natural', -1)
-        results.extend([doc async for doc in cursor2])
 
-    if lang:
-        lang_files = [file for file in results if lang in file.file_name.lower()]
-        files = lang_files[offset:][:max_results]
-        total_results = len(lang_files)
+    files = []
+    total_results = 0
+
+    # Check in primary DB
+    primary_cursor = Media.find(filter).sort('$natural', -1)
+    total_primary = await Media.count_documents(filter)
+    if offset < total_primary:
+        files = await primary_cursor.skip(offset).limit(max_results).to_list(length=max_results)
+        total_results += total_primary
+    elif SECOND_FILES_DATABASE_URL and SecondMedia:
+        # Offset goes beyond primary, adjust for second DB
+        offset2 = offset - total_primary
+        second_cursor = SecondMedia.find(filter).sort('$natural', -1)
+        total_second = await SecondMedia.count_documents(filter)
+        files = await second_cursor.skip(offset2).limit(max_results).to_list(length=max_results)
+        total_results = total_primary + total_second
     else:
-        total_results = len(results)
-        files = results[offset:][:max_results]
+        files = []
+        total_results = total_primary
 
     next_offset = offset + max_results
     if next_offset >= total_results:
         next_offset = ''
+
     return files, next_offset, total_results
 
 # For deleting files by search
